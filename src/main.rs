@@ -3,7 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
+use eframe::egui::{self, Color32, FontId, RichText, Vec2};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -153,7 +153,7 @@ struct RepoSection {
     is_opts: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct MirrorConf {
     countries:       String,
     proto_https:     bool,
@@ -674,7 +674,7 @@ impl App {
 // ── Background tasks ──────────────────────────────────────────────────────────
 
 fn fetch_updates(shared: &Arc<Mutex<Shared>>, aur: &Option<String>) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; s.status = "Querying packages…".into(); } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; s.status = "Querying packages…".into(); }
     let aur_helper = match aur {
         Some(h) => h.clone(),
         None => {
@@ -740,7 +740,7 @@ fn fetch_updates(shared: &Arc<Mutex<Shared>>, aur: &Option<String>) {
 
 fn do_updates(pw: &str, shared: &Arc<Mutex<Shared>>, aur: &Option<String>,
               has_off: bool, has_aur: bool, kernel_found: bool) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; }
     if has_off {
         push_log(shared, "── Official repo updates ──────────────────", LogColor::Dim);
         sudo_cmd_streaming(pw, &["pacman","-Syu","--noconfirm"], shared);
@@ -761,7 +761,7 @@ fn do_updates(pw: &str, shared: &Arc<Mutex<Shared>>, aur: &Option<String>,
 }
 
 fn fetch_search(shared: &Arc<Mutex<Shared>>, aur: &Option<String>, query: String) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; s.status = "Searching…".into(); } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; s.status = "Searching…".into(); }
     let mut results: Vec<SearchResult> = vec![];
     let mut seen: std::collections::HashSet<String> = Default::default();
 
@@ -809,7 +809,7 @@ fn fetch_search(shared: &Arc<Mutex<Shared>>, aur: &Option<String>, query: String
 }
 
 fn fetch_pkg_info(shared: &Arc<Mutex<Shared>>, aur: &Option<String>, pkg: String) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; }
     let local = run_cmd(&["pacman","-Qi",&pkg]);
     let sync  = run_cmd(&["pacman","-Si",&pkg]);
     let raw   = if !local.is_empty() { local.clone() } else { sync };
@@ -848,7 +848,7 @@ fn fetch_pkg_info(shared: &Arc<Mutex<Shared>>, aur: &Option<String>, pkg: String
 }
 
 fn fetch_stats(shared: &Arc<Mutex<Shared>>) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; }
     let mut data = StatsData::default();
     data.pkg_count = run_cmd(&["pacman","-Qq","--color","never"]).lines().count().to_string();
     data.explicit  = run_cmd(&["pacman","-Qqe","--color","never"]).lines().count().to_string();
@@ -913,7 +913,7 @@ fn fetch_stats(shared: &Arc<Mutex<Shared>>) {
 }
 
 fn fetch_orphans(shared: &Arc<Mutex<Shared>>) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; }
     let raw = run_cmd(&["pacman","-Qdtq"]);
     let pkgs: Vec<String> = raw.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
     let mut result: Vec<(String,String,String)> = vec![];
@@ -938,7 +938,7 @@ fn fetch_orphans(shared: &Arc<Mutex<Shared>>) {
 }
 
 fn fetch_repos(shared: &Arc<Mutex<Shared>>) {
-    { if let Ok(mut s) = shared.lock() { s.busy = true; } }
+    if let Ok(mut s) = shared.lock() { s.busy = true; }
     let (preamble, sections) = parse_pacman_conf("/etc/pacman.conf");
     if let Ok(mut s) = shared.lock() {
         s.repo_preamble = preamble;
