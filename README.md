@@ -37,7 +37,7 @@ rust  cargo
 
 ```bash
 # Clone and build
-git clone https://github.com/yourusername/arch-sysup-rs
+git clone https://github.com/broncbash/arch-sysup-rs
 cd arch-sysup-rs
 cargo build --release
 
