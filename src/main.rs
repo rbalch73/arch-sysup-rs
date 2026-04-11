@@ -489,7 +489,7 @@ fn tempfile() -> Result<(String, std::fs::File), String> {
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum Tab { Updates, Search, PkgInfo, Stats, Orphans, Repos, Mirrors, Maintenance }
+enum Tab { Updates, Search, PkgInfo, Stats, Orphans, Repos, Mirrors, Maintenance, Settings }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -553,6 +553,7 @@ struct App {
     // Status
     status:         String,
     busy:           bool,
+    ui_scale:       f32,
 }
 
 type SudoCallback  = Box<dyn FnOnce(&str, &Arc<Mutex<Shared>>, &Option<String>) + Send>;
@@ -587,6 +588,7 @@ impl App {
             show_confirm: false, confirm_msg: String::new(), confirm_action: None,
             show_log: false, log_lines: vec![],
             status: "Checking for updates…".into(), busy: true,
+            ui_scale: 1.0,
         }
     }
 
@@ -969,6 +971,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_shared();
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        ctx.set_pixels_per_point(self.ui_scale);
 
         // Apply visuals
         let mut visuals = if self.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -1008,6 +1011,7 @@ impl eframe::App for App {
                             Tab::Repos    => self.draw_repos(ui),
                             Tab::Mirrors  => self.draw_mirrors(ui),
                             Tab::Maintenance => self.draw_maintenance(ui),
+                            Tab::Settings => self.draw_settings(ui),
                         }
                     });
 
@@ -1026,7 +1030,7 @@ impl App {
         frame.show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("⟳  Arch-Sysup")
-                    .font(FontId::monospace(20.0)).color(self.theme.accent).strong());
+                    .font(FontId::monospace(22.0)).color(self.theme.accent).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let lbl = if self.dark_mode { "☀ Light Mode" } else { "☾ Dark Mode" };
                     if ui.button(lbl).clicked() { self.toggle_theme(); }
@@ -1040,7 +1044,7 @@ impl App {
                         self.theme.fg_dim
                     };
 
-                    ui.label(RichText::new(&self.status).font(FontId::monospace(10.0))
+                    ui.label(RichText::new(&self.status).font(FontId::monospace(12.0))
                         .color(status_color));
                     if self.busy {
                         ui.spinner();
@@ -1062,12 +1066,13 @@ impl App {
                 (Tab::Repos,    "Repositories"),
                 (Tab::Mirrors,  "Mirrors"),
                 (Tab::Maintenance, "Maintenance"),
+                (Tab::Settings, "Settings"),
             ];
             for (t, name) in &tabs {
                 let active = self.tab == *t;
                 let color  = if active { self.theme.accent } else { self.theme.fg_dim };
                 let btn    = ui.add(egui::Button::new(
-                    RichText::new(*name).font(FontId::monospace(10.0)).color(color).strong()
+                    RichText::new(*name).font(FontId::monospace(12.0)).color(color).strong()
                 ).fill(if active { self.theme.bg } else { self.theme.bg_panel })
                  .frame(true).rounding(0.0));
                 if btn.clicked() {
@@ -1114,7 +1119,7 @@ impl App {
                 ui.horizontal(|ui| {
                     for (lbl, w) in &[("Repo",100.0),("Package",220.0),("Old Version",160.0),("→",20.0),("New Version",160.0)] {
                         ui.add_sized([*w,18.0], egui::Label::new(
-                            RichText::new(*lbl).font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong()
+                            RichText::new(*lbl).font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong()
                         ));
                     }
                 });
@@ -1128,7 +1133,7 @@ impl App {
                     ui.add_space(40.0);
                     ui.centered_and_justified(|ui| {
                         ui.label(RichText::new("✓  System is up to date")
-                            .font(FontId::monospace(13.0)).color(self.theme.ver_new));
+                            .font(FontId::monospace(15.0)).color(self.theme.ver_new));
                     });
                 }
                 for (i, u) in self.updates.iter().enumerate() {
@@ -1139,32 +1144,32 @@ impl App {
                     frame.show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.add_sized([100.0,18.0], egui::Label::new(
-                                RichText::new(&u.repo).font(FontId::monospace(9.0))
+                                RichText::new(&u.repo).font(FontId::monospace(11.0))
                                     .color(self.theme.repo_color(&u.repo)).strong()
                             ));
                             let pkg_color = if u.kernel { self.theme.kernel_fg } else { self.theme.fg };
                             ui.add_sized([220.0,18.0], egui::Label::new(
-                                RichText::new(&u.pkg).font(FontId::monospace(10.0)).color(pkg_color)
+                                RichText::new(&u.pkg).font(FontId::monospace(12.0)).color(pkg_color)
                             ));
                             // Version diff
                             let (pre, suf) = split_ver_diff(&u.old, &u.new);
                             ui.add_sized([160.0,18.0], egui::Label::new({
-                                let mut rt = RichText::new(format!("{}{}", pre, suf)).font(FontId::monospace(10.0));
+                                let mut rt = RichText::new(format!("{}{}", pre, suf)).font(FontId::monospace(12.0));
                                 if !suf.is_empty() { rt = rt.color(self.theme.ver_old); }
                                 else { rt = rt.color(self.theme.fg); }
                                 rt
                             }));
-                            ui.label(RichText::new("→").color(self.theme.fg_dim).font(FontId::monospace(10.0)));
+                            ui.label(RichText::new("→").color(self.theme.fg_dim).font(FontId::monospace(12.0)));
                             let (pre2, suf2) = split_ver_diff(&u.new, &u.old);
                             ui.add_sized([160.0,18.0], egui::Label::new({
-                                let mut rt = RichText::new(format!("{}{}", pre2, suf2)).font(FontId::monospace(10.0));
+                                let mut rt = RichText::new(format!("{}{}", pre2, suf2)).font(FontId::monospace(12.0));
                                 if !suf2.is_empty() { rt = rt.color(self.theme.ver_new); }
                                 else { rt = rt.color(self.theme.fg); }
                                 rt
                             }));
                             if u.kernel {
                                 ui.label(RichText::new("⚠ KERNEL").color(self.theme.kernel_fg)
-                                    .font(FontId::monospace(9.0)).strong());
+                                    .font(FontId::monospace(11.0)).strong());
                             }
                         });
                     });
@@ -1179,7 +1184,7 @@ impl App {
             let msg = if count == 0 { "No updates available".into() }
                       else { format!("{} package{} to update{}", count, if count==1 {""} else {"s"},
                              if self.kernel_found { "  ⚠ kernel update!" } else {""}) };
-            ui.label(RichText::new(msg).font(FontId::monospace(10.0)).color(self.theme.fg_dim));
+            ui.label(RichText::new(msg).font(FontId::monospace(12.0)).color(self.theme.fg_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let can_update = !self.updates.is_empty() && !self.busy;
@@ -1195,7 +1200,7 @@ impl App {
                         do_updates(pw, sh, aur, has_off, has_aur, kf);
                     });
                 }
-                if ui.button(RichText::new("↻  Refresh").font(FontId::monospace(10.0))).clicked() && !self.busy {
+                if ui.button(RichText::new("↻  Refresh").font(FontId::monospace(12.0))).clicked() && !self.busy {
                     self.busy = true;
                     self.updates.clear();
                     let sh = self.shared.clone(); let aur = self.aur_helper.clone();
@@ -1210,9 +1215,9 @@ impl App {
     fn draw_search(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("Search packages:").font(FontId::monospace(10.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("Search packages:").font(FontId::monospace(12.0)).color(self.theme.fg).strong());
             let resp = ui.add(egui::TextEdit::singleline(&mut self.search_query)
-                .font(FontId::monospace(10.0)).desired_width(280.0)
+                .font(FontId::monospace(12.0)).desired_width(280.0)
                 .hint_text("package name…"));
             if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 || ui.button("  Search  ").clicked() {
@@ -1237,7 +1242,7 @@ impl App {
                 ui.add_space(28.0);
                 for (lbl,w) in &[("Repo",100.0),("Package",200.0),("Version",140.0),("Description",0.0)] {
                     ui.add_sized([*w,16.0], egui::Label::new(
-                        RichText::new(*lbl).font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong()
+                        RichText::new(*lbl).font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong()
                     ));
                 }
             });
@@ -1250,7 +1255,7 @@ impl App {
                     ui.add_space(30.0);
                     ui.centered_and_justified(|ui| {
                         ui.label(RichText::new("Search for a package above")
-                            .color(self.theme.fg_dim).font(FontId::monospace(11.0)));
+                            .color(self.theme.fg_dim).font(FontId::monospace(13.0)));
                     });
                 }
                 for (i, r) in self.search_res.iter_mut().enumerate() {
@@ -1259,7 +1264,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut r.selected, "");
                             ui.add_sized([100.0,16.0], egui::Label::new(
-                                RichText::new(&r.repo).font(FontId::monospace(9.0))
+                                RichText::new(&r.repo).font(FontId::monospace(11.0))
                                     .color({
                                         let t = Theme::dark();
                                         t.repo_color(&r.repo)
@@ -1268,13 +1273,13 @@ impl App {
                             let pkg_txt = if r.installed { format!("{} ✓", r.pkg) } else { r.pkg.clone() };
                             let pkg_col = if r.installed { self.theme.ver_new } else { self.theme.fg };
                             ui.add_sized([200.0,16.0], egui::Label::new(
-                                RichText::new(pkg_txt).font(FontId::monospace(10.0)).color(pkg_col)
+                                RichText::new(pkg_txt).font(FontId::monospace(12.0)).color(pkg_col)
                             ));
                             ui.add_sized([140.0,16.0], egui::Label::new(
-                                RichText::new(&r.ver).font(FontId::monospace(10.0)).color(self.theme.fg_dim)
+                                RichText::new(&r.ver).font(FontId::monospace(12.0)).color(self.theme.fg_dim)
                             ));
                             let desc: String = r.desc.chars().take(80).collect();
-                            ui.label(RichText::new(desc).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                            ui.label(RichText::new(desc).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                         });
                     });
                 }
@@ -1293,7 +1298,7 @@ impl App {
                             if !to_rem.is_empty()  { parts.push(format!("{} to uninstall", to_rem.len())); }
                             format!("Selected: {}", parts.join("  •  "))
                         };
-            ui.label(RichText::new(label).font(FontId::monospace(10.0)).color(self.theme.fg_dim));
+            ui.label(RichText::new(label).font(FontId::monospace(12.0)).color(self.theme.fg_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 if !to_inst.is_empty() {
@@ -1355,9 +1360,9 @@ impl App {
     fn draw_pkg_info(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("Package name:").font(FontId::monospace(10.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("Package name:").font(FontId::monospace(12.0)).color(self.theme.fg).strong());
             let resp = ui.add(egui::TextEdit::singleline(&mut self.info_query)
-                .font(FontId::monospace(10.0)).desired_width(240.0));
+                .font(FontId::monospace(12.0)).desired_width(240.0));
             if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 || ui.button("  Look Up  ").clicked() {
                 let pkg = self.info_query.clone();
@@ -1376,17 +1381,17 @@ impl App {
                     ui.add_space(30.0);
                     ui.centered_and_justified(|ui| {
                         ui.label(RichText::new("Enter a package name above")
-                            .color(self.theme.fg_dim).font(FontId::monospace(11.0)));
+                            .color(self.theme.fg_dim).font(FontId::monospace(13.0)));
                     });
                 }
                 Some((pkg, None)) => {
                     ui.label(RichText::new(format!("Package '{}' not found.", pkg))
-                        .color(self.theme.ver_old).font(FontId::monospace(11.0)));
+                        .color(self.theme.ver_old).font(FontId::monospace(13.0)));
                 }
                 Some((_, Some(info))) => {
                     let badge = if info.installed { ("● Installed", self.theme.ver_new) }
                                 else { ("○ Not installed", self.theme.fg_dim) };
-                    ui.label(RichText::new(badge.0).color(badge.1).font(FontId::monospace(10.0)).strong());
+                    ui.label(RichText::new(badge.0).color(badge.1).font(FontId::monospace(12.0)).strong());
                     ui.add_space(8.0);
 
                     let show = ["Name","Version","Description","URL","Licenses","Repository",
@@ -1398,8 +1403,8 @@ impl App {
                             if let Some((_,val)) = info.fields.iter().find(|(k,_)| k==key) {
                                 if !val.is_empty() && val != "None" {
                                     ui.label(RichText::new(format!("{}:", key))
-                                        .font(FontId::monospace(10.0)).color(self.theme.fg_dim).strong());
-                                    ui.label(RichText::new(val).font(FontId::monospace(10.0)).color(self.theme.fg));
+                                        .font(FontId::monospace(12.0)).color(self.theme.fg_dim).strong());
+                                    ui.label(RichText::new(val).font(FontId::monospace(12.0)).color(self.theme.fg));
                                     ui.end_row();
                                 }
                             }
@@ -1408,12 +1413,12 @@ impl App {
 
                     if !info.files.is_empty() {
                         ui.add_space(12.0);
-                        ui.label(RichText::new("Installed Files:").font(FontId::monospace(10.0))
+                        ui.label(RichText::new("Installed Files:").font(FontId::monospace(12.0))
                             .color(self.theme.fg_dim).strong());
                         egui::ScrollArea::vertical().id_source("files_scroll").max_height(200.0).show(ui, |ui| {
                             for line in info.files.lines() {
                                 let path = line.split_whitespace().nth(1).unwrap_or(line);
-                                ui.label(RichText::new(path).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                                ui.label(RichText::new(path).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                             }
                         });
                     }
@@ -1428,7 +1433,7 @@ impl App {
     fn draw_stats(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("System Statistics").font(FontId::monospace(11.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("System Statistics").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("↻  Refresh Stats").clicked() {
                     self.busy = true;
@@ -1444,8 +1449,8 @@ impl App {
                 .min_col_width(160.0).show(ui, |ui| {
                 let add = |ui: &mut egui::Ui, lbl: &str, val: &str, col: Color32| {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(lbl).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
-                        ui.label(RichText::new(val).font(FontId::monospace(12.0)).color(col).strong());
+                        ui.label(RichText::new(lbl).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+                        ui.label(RichText::new(val).font(FontId::monospace(14.0)).color(col).strong());
                     });
                 };
                 add(ui, "Total Packages",  &s.pkg_count,  self.theme.fg);
@@ -1468,7 +1473,7 @@ impl App {
             ui.add_space(8.0);
 
             // Disk donut bars (simple progress bars in egui)
-            ui.label(RichText::new("System & Disk Usage").font(FontId::monospace(10.0)).color(self.theme.fg_dim).strong());
+            ui.label(RichText::new("System & Disk Usage").font(FontId::monospace(12.0)).color(self.theme.fg_dim).strong());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 // RAM usage
@@ -1479,7 +1484,7 @@ impl App {
                         s.ram_used / 1024.0 / 1024.0 / 1024.0,
                         s.ram_total / 1024.0 / 1024.0 / 1024.0,
                         pct * 100.0))
-                        .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                        .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                     let bar = egui::ProgressBar::new(pct).fill(self.theme.accent).desired_width(180.0);
                     ui.add(bar);
                 });
@@ -1489,7 +1494,7 @@ impl App {
                 ui.vertical(|ui| {
                     ui.set_min_width(200.0);
                     ui.label(RichText::new(format!("CPU — {:.1}%", s.cpu_usage))
-                        .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                        .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                     let bar = egui::ProgressBar::new(s.cpu_usage / 100.0).fill(self.theme.ver_old).desired_width(180.0);
                     ui.add(bar);
                 });
@@ -1503,7 +1508,7 @@ impl App {
                         ui.set_min_width(200.0);
                         let pct = if total > 0.0 { used/total } else { 0.0 };
                         ui.label(RichText::new(format!("{} — {:.0}%", label, pct*100.0))
-                            .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                            .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                         let bar = egui::ProgressBar::new(pct).fill(color).desired_width(180.0);
                         ui.add(bar);
                     });
@@ -1518,7 +1523,7 @@ impl App {
             let orph  = s.orphans.parse::<f32>().unwrap_or(0.0);
             let dep   = (total - exp).max(0.0);
             ui.add_space(12.0);
-            ui.label(RichText::new("Package Breakdown").font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong());
+            ui.label(RichText::new("Package Breakdown").font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong());
             ui.add_space(4.0);
             let bar_w = ui.available_width().min(500.0);
             let (response, painter) = ui.allocate_painter(Vec2::new(bar_w, 24.0), egui::Sense::hover());
@@ -1544,7 +1549,7 @@ impl App {
                     let (r,p) = ui.allocate_painter(Vec2::new(12.0,12.0), egui::Sense::hover());
                     p.rect_filled(r.rect, 0.0, col);
                     ui.label(RichText::new(format!("{}: {}", lbl, n))
-                        .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                        .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                     ui.add_space(12.0);
                 }
             });
@@ -1558,10 +1563,10 @@ impl App {
     fn draw_orphans(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("Orphan Packages").font(FontId::monospace(11.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("Orphan Packages").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
             let count = self.orphans.len();
             if count > 0 {
-                ui.label(RichText::new(format!("— {} found", count)).font(FontId::monospace(10.0)).color(self.theme.ver_old));
+                ui.label(RichText::new(format!("— {} found", count)).font(FontId::monospace(12.0)).color(self.theme.ver_old));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let sel: Vec<String> = self.orphans.iter().filter(|o| o.3).map(|o| o.0.clone()).collect();
@@ -1597,7 +1602,7 @@ impl App {
 
         ui.add_space(4.0);
         ui.label(RichText::new("ℹ  Orphans are packages installed as dependencies that are no longer required by any other package.\n   Review carefully before removing — some may be intentionally standalone.")
-            .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
         ui.separator();
 
         // Column header
@@ -1606,7 +1611,7 @@ impl App {
                 ui.add_space(28.0);
                 for (lbl,w) in &[("Package",200.0),("Version",140.0),("Description",0.0)] {
                     ui.add_sized([*w,16.0], egui::Label::new(
-                        RichText::new(*lbl).font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong()
+                        RichText::new(*lbl).font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong()
                     ));
                 }
             });
@@ -1616,7 +1621,7 @@ impl App {
             if self.orphans.is_empty() && !self.busy {
                 ui.add_space(30.0);
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("✓  No orphan packages found.").color(self.theme.ver_new).font(FontId::monospace(11.0)));
+                    ui.label(RichText::new("✓  No orphan packages found.").color(self.theme.ver_new).font(FontId::monospace(13.0)));
                 });
             }
             for (i, (name, ver, desc, selected)) in self.orphans.iter_mut().enumerate() {
@@ -1625,13 +1630,13 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.checkbox(selected, "");
                         ui.add_sized([200.0,16.0], egui::Label::new(
-                            RichText::new(name.as_str()).font(FontId::monospace(10.0)).color(self.theme.ver_old)
+                            RichText::new(name.as_str()).font(FontId::monospace(12.0)).color(self.theme.ver_old)
                         ));
                         ui.add_sized([140.0,16.0], egui::Label::new(
-                            RichText::new(ver.as_str()).font(FontId::monospace(10.0)).color(self.theme.fg_dim)
+                            RichText::new(ver.as_str()).font(FontId::monospace(12.0)).color(self.theme.fg_dim)
                         ));
                         let d: String = desc.chars().take(70).collect();
-                        ui.label(RichText::new(d).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                        ui.label(RichText::new(d).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                     });
                 });
             }
@@ -1643,9 +1648,9 @@ impl App {
     fn draw_repos(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("Configured Repositories").font(FontId::monospace(11.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("Configured Repositories").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
             if self.repo_dirty {
-                ui.label(RichText::new("● Unsaved changes").font(FontId::monospace(10.0)).color(self.theme.btn_orange));
+                ui.label(RichText::new("● Unsaved changes").font(FontId::monospace(12.0)).color(self.theme.btn_orange));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
@@ -1688,12 +1693,12 @@ impl App {
                 ui.add_space(8.0);
                 for (lbl,w) in &[("Status",70.0),("Repository",180.0),("Include / Server",0.0)] {
                     ui.add_sized([*w,16.0], egui::Label::new(
-                        RichText::new(*lbl).font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong()
+                        RichText::new(*lbl).font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong()
                     ));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
-                    ui.label(RichText::new("Actions").font(FontId::monospace(9.0)).color(self.theme.fg_dim).strong());
+                    ui.label(RichText::new("Actions").font(FontId::monospace(11.0)).color(self.theme.fg_dim).strong());
                 });
             });
         });
@@ -1716,10 +1721,10 @@ impl App {
                                 ("○ OFF", self.theme.fg_dim)
                             };
                             ui.add_sized([70.0,16.0], egui::Label::new(
-                                RichText::new(status_txt).font(FontId::monospace(9.0)).color(status_col).strong()
+                                RichText::new(status_txt).font(FontId::monospace(11.0)).color(status_col).strong()
                             ));
                             ui.add_sized([180.0,16.0], egui::Label::new(
-                                RichText::new(format!("[{}]", sec.name)).font(FontId::monospace(10.0))
+                                RichText::new(format!("[{}]", sec.name)).font(FontId::monospace(12.0))
                                     .color(self.theme.repo_color(&sec.name)).strong()
                             ));
                             // Include/Server lines
@@ -1731,7 +1736,7 @@ impl App {
                                 } else { None }
                             }).collect();
                             let inc_txt = if incs.is_empty() { "(none)".into() } else { incs.join("  |  ") };
-                            ui.label(RichText::new(inc_txt).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                            ui.label(RichText::new(inc_txt).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let name_lower = sec.name.to_lowercase();
@@ -1770,7 +1775,7 @@ impl App {
 
         ui.separator();
         ui.label(RichText::new("ℹ  Changes are written to /etc/pacman.conf and require sudo. A pacman -Sy will run after saving.")
-            .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
     }
 
     // ── Mirrors ───────────────────────────────────────────────────────────────
@@ -1778,7 +1783,7 @@ impl App {
     fn draw_maintenance(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("System Maintenance").font(FontId::monospace(11.0)).color(self.theme.fg).strong());
+            ui.label(RichText::new("System Maintenance").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
         });
         ui.separator();
 
@@ -1786,8 +1791,8 @@ impl App {
         egui::Grid::new("maint_grid").num_columns(2).spacing([20.0, 20.0]).show(ui, |ui| {
             // Package Cache
             ui.vertical(|ui| {
-                ui.label(RichText::new("Package Cache").font(FontId::monospace(10.0)).strong());
-                ui.label(RichText::new("Remove old versions of installed and uninstalled packages from the cache.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                ui.label(RichText::new("Package Cache").font(FontId::monospace(12.0)).strong());
+                ui.label(RichText::new("Remove old versions of installed and uninstalled packages from the cache.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
             });
             if ui.add(egui::Button::new(RichText::new("Clear Cache (paccache)").color(Color32::WHITE)).fill(self.theme.btn_orange)).clicked() {
                 self.clear_log(); self.show_log = true;
@@ -1801,8 +1806,8 @@ impl App {
 
             // Journal Logs
             ui.vertical(|ui| {
-                ui.label(RichText::new("Systemd Journal").font(FontId::monospace(10.0)).strong());
-                ui.label(RichText::new("Vacuum systemd journal logs older than 2 weeks to free up space.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                ui.label(RichText::new("Systemd Journal").font(FontId::monospace(12.0)).strong());
+                ui.label(RichText::new("Vacuum systemd journal logs older than 2 weeks to free up space.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
             });
             if ui.add(egui::Button::new(RichText::new("Vacuum Logs").color(Color32::WHITE)).fill(self.theme.btn_accent)).clicked() {
                 self.clear_log(); self.show_log = true;
@@ -1816,8 +1821,8 @@ impl App {
 
             // Unused Dependencies
             ui.vertical(|ui| {
-                ui.label(RichText::new("Unused Dependencies").font(FontId::monospace(10.0)).strong());
-                ui.label(RichText::new("Remove packages that are no longer needed (orphans).").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                ui.label(RichText::new("Unused Dependencies").font(FontId::monospace(12.0)).strong());
+                ui.label(RichText::new("Remove packages that are no longer needed (orphans).").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
             });
             if ui.add(egui::Button::new(RichText::new("Remove Orphans").color(Color32::WHITE)).fill(self.theme.btn_red)).clicked() {
                 self.clear_log(); self.show_log = true;
@@ -1839,8 +1844,8 @@ impl App {
 
             // Optimize Database
             ui.vertical(|ui| {
-                ui.label(RichText::new("Database Optimization").font(FontId::monospace(10.0)).strong());
-                ui.label(RichText::new("Optimize the pacman database for faster access.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                ui.label(RichText::new("Database Optimization").font(FontId::monospace(12.0)).strong());
+                ui.label(RichText::new("Optimize the pacman database for faster access.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
             });
             if ui.add(egui::Button::new(RichText::new("Optimize DB").color(Color32::WHITE)).fill(self.theme.btn_green)).clicked() {
                 self.clear_log(); self.show_log = true;
@@ -1862,7 +1867,7 @@ impl App {
 
                 let section = |ui: &mut egui::Ui, title: &str| {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(title).font(FontId::monospace(10.0))
+                    ui.label(RichText::new(title).font(FontId::monospace(12.0))
                         .color(self.theme.accent).strong());
                     ui.separator();
                 };
@@ -1871,11 +1876,11 @@ impl App {
                 section(ui, "Country / Region");
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("Countries:").font(FontId::monospace(10.0)).color(self.theme.fg));
+                    ui.label(RichText::new("Countries:").font(FontId::monospace(12.0)).color(self.theme.fg));
                     let r = ui.add(egui::TextEdit::singleline(&mut self.mirror_conf.countries)
-                        .font(FontId::monospace(10.0)).desired_width(260.0));
+                        .font(FontId::monospace(12.0)).desired_width(260.0));
                     if r.changed() { self.mirror_dirty = true; }
-                    ui.label(RichText::new("e.g. US,GB,DE  (blank = all)").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    ui.label(RichText::new("e.g. US,GB,DE  (blank = all)").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                 });
 
                 // Protocol
@@ -1904,33 +1909,33 @@ impl App {
                 section(ui, "Number of Mirrors");
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("Latest N mirrors:").font(FontId::monospace(10.0)).color(self.theme.fg));
+                    ui.label(RichText::new("Latest N mirrors:").font(FontId::monospace(12.0)).color(self.theme.fg));
                     let r = ui.add(egui::TextEdit::singleline(&mut self.mirror_conf.latest)
-                        .font(FontId::monospace(10.0)).desired_width(50.0));
+                        .font(FontId::monospace(12.0)).desired_width(50.0));
                     if r.changed() { self.mirror_dirty = true; }
-                    ui.label(RichText::new("select from N most recently synced").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    ui.label(RichText::new("select from N most recently synced").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                 });
 
                 // Age
                 section(ui, "Maximum Mirror Age");
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("Maximum age:").font(FontId::monospace(10.0)).color(self.theme.fg));
+                    ui.label(RichText::new("Maximum age:").font(FontId::monospace(12.0)).color(self.theme.fg));
                     let r = ui.add(egui::TextEdit::singleline(&mut self.mirror_conf.age)
-                        .font(FontId::monospace(10.0)).desired_width(50.0));
+                        .font(FontId::monospace(12.0)).desired_width(50.0));
                     if r.changed() { self.mirror_dirty = true; }
-                    ui.label(RichText::new("hours since last sync").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    ui.label(RichText::new("hours since last sync").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                 });
 
                 // Timeout
                 section(ui, "Connection Timeout");
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("Connection timeout:").font(FontId::monospace(10.0)).color(self.theme.fg));
+                    ui.label(RichText::new("Connection timeout:").font(FontId::monospace(12.0)).color(self.theme.fg));
                     let r = ui.add(egui::TextEdit::singleline(&mut self.mirror_conf.timeout)
-                        .font(FontId::monospace(10.0)).desired_width(50.0));
+                        .font(FontId::monospace(12.0)).desired_width(50.0));
                     if r.changed() { self.mirror_dirty = true; }
-                    ui.label(RichText::new("seconds").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    ui.label(RichText::new("seconds").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                 });
 
                 // Extra
@@ -1947,7 +1952,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.separator();
                 if !self.mirror_status.is_empty() {
-                    ui.label(RichText::new(&self.mirror_status).font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    ui.label(RichText::new(&self.mirror_status).font(FontId::monospace(11.0)).color(self.theme.fg_dim));
                 }
             });
 
@@ -1956,7 +1961,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             if self.mirror_dirty {
-                ui.label(RichText::new("● Unsaved changes").font(FontId::monospace(9.0)).color(self.theme.btn_orange));
+                ui.label(RichText::new("● Unsaved changes").font(FontId::monospace(11.0)).color(self.theme.btn_orange));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
@@ -2019,6 +2024,33 @@ impl App {
 
     // ── Log panel ─────────────────────────────────────────────────────────────
 
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+
+    fn draw_settings(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.label(RichText::new("Application Settings").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
+        });
+        ui.separator();
+
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.label(RichText::new("Global UI Scale:").font(FontId::monospace(12.0)).color(self.theme.fg));
+            ui.add(egui::Slider::new(&mut self.ui_scale, 0.5..=2.5).step_by(0.1));
+            if ui.button("Reset").clicked() {
+                self.ui_scale = 1.0;
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(32.0);
+            ui.label(RichText::new("ℹ Adjusting this will scale the entire interface, including text and buttons.")
+                .font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+        });
+    }
+
     fn draw_log(&mut self, ui: &mut egui::Ui) {
         ui.separator();
         let avail = (ui.available_height()).max(80.0).min(220.0);
@@ -2035,7 +2067,7 @@ impl App {
                             LogColor::Accent => self.theme.accent,
                             LogColor::Orange => self.theme.btn_orange,
                         };
-                        ui.label(RichText::new(line).font(FontId::monospace(9.0)).color(col));
+                        ui.label(RichText::new(line).font(FontId::monospace(11.0)).color(col));
                     }
                 });
         });
@@ -2048,15 +2080,15 @@ impl App {
             .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0,0.0])
             .min_width(380.0).show(ctx, |ui| {
                 ui.add_space(8.0);
-                ui.label(RichText::new(&self.sudo_prompt.clone()).font(FontId::monospace(10.0)).color(self.theme.fg));
+                ui.label(RichText::new(&self.sudo_prompt.clone()).font(FontId::monospace(12.0)).color(self.theme.fg));
                 ui.add_space(8.0);
                 let pw_resp = ui.add(egui::TextEdit::singleline(&mut self.sudo_pw)
-                    .password(true).font(FontId::monospace(10.0)).desired_width(320.0)
+                    .password(true).font(FontId::monospace(12.0)).desired_width(320.0)
                     .hint_text("password"));
                 pw_resp.request_focus();
                 if !self.sudo_error.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(&self.sudo_error.clone()).color(self.theme.ver_old).font(FontId::monospace(10.0)));
+                    ui.label(RichText::new(&self.sudo_error.clone()).color(self.theme.ver_old).font(FontId::monospace(12.0)));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -2081,7 +2113,7 @@ impl App {
             .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0,0.0])
             .min_width(360.0).show(ctx, |ui| {
                 ui.add_space(8.0);
-                ui.label(RichText::new(&msg).font(FontId::monospace(10.0)).color(self.theme.fg));
+                ui.label(RichText::new(&msg).font(FontId::monospace(12.0)).color(self.theme.fg));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(
@@ -2106,7 +2138,7 @@ impl App {
             .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0,0.0])
             .show(ctx, |ui| {
                 ui.label(RichText::new("A new kernel was installed.\nReboot now to apply it?")
-                    .font(FontId::monospace(11.0)).color(self.theme.fg));
+                    .font(FontId::monospace(13.0)).color(self.theme.fg));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(
@@ -2125,13 +2157,13 @@ impl App {
             .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0,0.0])
             .min_width(460.0).show(ctx, |ui| {
                 ui.label(RichText::new("Add Repository to pacman.conf")
-                    .font(FontId::monospace(10.0)).color(self.theme.accent).strong());
+                    .font(FontId::monospace(12.0)).color(self.theme.accent).strong());
                 ui.add_space(8.0);
                 egui::Grid::new("add_repo_grid").num_columns(2).spacing([12.0,8.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Repository name:").font(FontId::monospace(10.0)));
+                    ui.label(RichText::new("Repository name:").font(FontId::monospace(12.0)));
                     ui.add(egui::TextEdit::singleline(&mut self.new_repo_name).desired_width(240.0));
                     ui.end_row();
-                    ui.label(RichText::new("Include / Server:").font(FontId::monospace(10.0)));
+                    ui.label(RichText::new("Include / Server:").font(FontId::monospace(12.0)));
                     ui.add(egui::TextEdit::singleline(&mut self.new_repo_inc).desired_width(240.0));
                     ui.end_row();
                 });
