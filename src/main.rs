@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use sysinfo::{CpuRefreshKind, System};
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,6 @@ struct Theme {
     fg:         Color32,
     fg_dim:     Color32,
     accent:     Color32,
-    border:     Color32,
     btn_bg:     Color32,
     ver_old:    Color32,
     ver_new:    Color32,
@@ -56,7 +56,7 @@ impl Theme {
             bg_row_alt: hex("12171f"), bg_hdr:     hex("1c2230"),
             bg_log:     hex("0a0e14"), fg:          hex("c9d1d9"),
             fg_dim:     hex("6e7681"), accent:      hex("58a6ff"),
-            border:     hex("30363d"), btn_bg:      hex("21262d"),
+            btn_bg:     hex("21262d"),
             ver_old:    hex("f85149"), ver_new:     hex("3fb950"),
             kernel_fg:  hex("ff4444"), kernel_bg:   hex("2d0f0f"),
             btn_green:  hex("238636"), btn_red:     hex("b62324"),
@@ -74,7 +74,7 @@ impl Theme {
             bg_row_alt: hex("f0f2f4"), bg_hdr:     hex("e8ecf0"),
             bg_log:     hex("1c1c1c"), fg:          hex("1f2328"),
             fg_dim:     hex("656d76"), accent:      hex("0969da"),
-            border:     hex("d0d7de"), btn_bg:      hex("e6edf3"),
+            btn_bg:     hex("e6edf3"),
             ver_old:    hex("cf222e"), ver_new:     hex("1a7f37"),
             kernel_fg:  hex("cf222e"), kernel_bg:   hex("ffebe9"),
             btn_green:  hex("1a7f37"), btn_red:     hex("cf222e"),
@@ -143,6 +143,9 @@ struct StatsData {
     root_total:f32,
     home_used: f32,
     home_total:f32,
+    ram_used:  f32,
+    ram_total: f32,
+    cpu_usage: f32,
 }
 
 #[derive(Clone)]
@@ -204,7 +207,7 @@ enum LogColor { Normal, Dim, Green, Red, Accent, Orange }
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn detect_aur_helper() -> Option<String> {
-    for h in &["yay", "paru"] {
+    for h in &["yay", "paru", "aura", "pakku"] {
         if which(h) { return Some(h.to_string()); }
     }
     None
@@ -486,7 +489,7 @@ fn tempfile() -> Result<(String, std::fs::File), String> {
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum Tab { Updates, Search, PkgInfo, Stats, Orphans, Repos, Mirrors }
+enum Tab { Updates, Search, PkgInfo, Stats, Orphans, Repos, Mirrors, Maintenance }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -901,6 +904,19 @@ fn fetch_stats(shared: &Arc<Mutex<Shared>>) {
         }).unwrap_or_else(|_| "Unknown".into());
 
     data.kernel_ver = run_cmd(&["uname","-r"]);
+
+    // RAM and CPU usage using sysinfo
+    let mut sys = System::new_all();
+    sys.refresh_cpu_specifics(CpuRefreshKind::everything());
+    sys.refresh_memory();
+    // Give it a tiny bit of time to get CPU usage
+    thread::sleep(std::time::Duration::from_millis(100));
+    sys.refresh_cpu_specifics(CpuRefreshKind::everything());
+
+    data.ram_used = sys.used_memory() as f32;
+    data.ram_total = sys.total_memory() as f32;
+    data.cpu_usage = sys.global_cpu_info().cpu_usage();
+
     data.uptime = std::fs::read_to_string("/proc/uptime")
         .map(|s| {
             let secs = s.split_whitespace().next()
@@ -991,6 +1007,7 @@ impl eframe::App for App {
                             Tab::Orphans  => self.draw_orphans(ui),
                             Tab::Repos    => self.draw_repos(ui),
                             Tab::Mirrors  => self.draw_mirrors(ui),
+                            Tab::Maintenance => self.draw_maintenance(ui),
                         }
                     });
 
@@ -1002,20 +1019,33 @@ impl eframe::App for App {
 
 impl App {
     fn draw_header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add_space(16.0);
-            ui.label(RichText::new("⟳  Arch-Sysup")
-                .font(FontId::monospace(18.0)).color(self.theme.accent).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(16.0);
-                let lbl = if self.dark_mode { "☀ Light Mode" } else { "☾ Dark Mode" };
-                if ui.button(lbl).clicked() { self.toggle_theme(); }
-                ui.separator();
-                ui.label(RichText::new(&self.status).font(FontId::monospace(10.0))
-                    .color(self.theme.fg_dim));
-                if self.busy {
-                    ui.spinner();
-                }
+        let frame = egui::Frame::none()
+            .fill(self.theme.bg_hdr)
+            .inner_margin(egui::Margin::symmetric(16.0, 8.0));
+
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("⟳  Arch-Sysup")
+                    .font(FontId::monospace(20.0)).color(self.theme.accent).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let lbl = if self.dark_mode { "☀ Light Mode" } else { "☾ Dark Mode" };
+                    if ui.button(lbl).clicked() { self.toggle_theme(); }
+                    ui.separator();
+
+                    let status_color = if self.status.contains("up to date") || self.status.contains("complete") {
+                        self.theme.ver_new
+                    } else if self.status.contains("Error") || self.status.contains("Failed") {
+                        self.theme.ver_old
+                    } else {
+                        self.theme.fg_dim
+                    };
+
+                    ui.label(RichText::new(&self.status).font(FontId::monospace(10.0))
+                        .color(status_color));
+                    if self.busy {
+                        ui.spinner();
+                    }
+                });
             });
         });
         ui.separator();
@@ -1031,6 +1061,7 @@ impl App {
                 (Tab::Orphans,  "Orphans"),
                 (Tab::Repos,    "Repositories"),
                 (Tab::Mirrors,  "Mirrors"),
+                (Tab::Maintenance, "Maintenance"),
             ];
             for (t, name) in &tabs {
                 let active = self.tab == *t;
@@ -1437,9 +1468,33 @@ impl App {
             ui.add_space(8.0);
 
             // Disk donut bars (simple progress bars in egui)
-            ui.label(RichText::new("Disk Usage").font(FontId::monospace(10.0)).color(self.theme.fg_dim).strong());
+            ui.label(RichText::new("System & Disk Usage").font(FontId::monospace(10.0)).color(self.theme.fg_dim).strong());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
+                // RAM usage
+                ui.vertical(|ui| {
+                    ui.set_min_width(200.0);
+                    let pct = if s.ram_total > 0.0 { s.ram_used / s.ram_total } else { 0.0 };
+                    ui.label(RichText::new(format!("RAM — {:.1} / {:.1} GB ({:.0}%)",
+                        s.ram_used / 1024.0 / 1024.0 / 1024.0,
+                        s.ram_total / 1024.0 / 1024.0 / 1024.0,
+                        pct * 100.0))
+                        .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    let bar = egui::ProgressBar::new(pct).fill(self.theme.accent).desired_width(180.0);
+                    ui.add(bar);
+                });
+                ui.add_space(32.0);
+
+                // CPU usage
+                ui.vertical(|ui| {
+                    ui.set_min_width(200.0);
+                    ui.label(RichText::new(format!("CPU — {:.1}%", s.cpu_usage))
+                        .font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+                    let bar = egui::ProgressBar::new(s.cpu_usage / 100.0).fill(self.theme.ver_old).desired_width(180.0);
+                    ui.add(bar);
+                });
+                ui.add_space(32.0);
+
                 for (label, used, total, color) in [
                     ("Root /", s.root_used, s.root_total, self.theme.chart1),
                     ("Home ~", s.home_used, s.home_total, self.theme.chart2),
@@ -1719,6 +1774,85 @@ impl App {
     }
 
     // ── Mirrors ───────────────────────────────────────────────────────────────
+
+    fn draw_maintenance(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.label(RichText::new("System Maintenance").font(FontId::monospace(11.0)).color(self.theme.fg).strong());
+        });
+        ui.separator();
+
+        ui.add_space(8.0);
+        egui::Grid::new("maint_grid").num_columns(2).spacing([20.0, 20.0]).show(ui, |ui| {
+            // Package Cache
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Package Cache").font(FontId::monospace(10.0)).strong());
+                ui.label(RichText::new("Remove old versions of installed and uninstalled packages from the cache.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            });
+            if ui.add(egui::Button::new(RichText::new("Clear Cache (paccache)").color(Color32::WHITE)).fill(self.theme.btn_orange)).clicked() {
+                self.clear_log(); self.show_log = true;
+                self.request_sudo("Enter sudo password to clear package cache:", |pw, sh, _| {
+                    push_log(sh, "Cleaning package cache...", LogColor::Accent);
+                    sudo_cmd_streaming(pw, &["paccache", "-r"], sh);
+                    push_log(sh, "✓ Cache cleaned.", LogColor::Green);
+                });
+            }
+            ui.end_row();
+
+            // Journal Logs
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Systemd Journal").font(FontId::monospace(10.0)).strong());
+                ui.label(RichText::new("Vacuum systemd journal logs older than 2 weeks to free up space.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            });
+            if ui.add(egui::Button::new(RichText::new("Vacuum Logs").color(Color32::WHITE)).fill(self.theme.btn_accent)).clicked() {
+                self.clear_log(); self.show_log = true;
+                self.request_sudo("Enter sudo password to vacuum journal logs:", |pw, sh, _| {
+                    push_log(sh, "Vacuuming journal logs...", LogColor::Accent);
+                    sudo_cmd_streaming(pw, &["journalctl", "--vacuum-time=2weeks"], sh);
+                    push_log(sh, "✓ Logs vacuumed.", LogColor::Green);
+                });
+            }
+            ui.end_row();
+
+            // Unused Dependencies
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Unused Dependencies").font(FontId::monospace(10.0)).strong());
+                ui.label(RichText::new("Remove packages that are no longer needed (orphans).").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            });
+            if ui.add(egui::Button::new(RichText::new("Remove Orphans").color(Color32::WHITE)).fill(self.theme.btn_red)).clicked() {
+                self.clear_log(); self.show_log = true;
+                self.request_sudo("Enter sudo password to remove all orphans:", |pw, sh, _| {
+                    push_log(sh, "Checking for orphans...", LogColor::Accent);
+                    let orphans = run_cmd(&["pacman", "-Qdtq"]);
+                    if orphans.is_empty() {
+                        push_log(sh, "No orphans found.", LogColor::Green);
+                    } else {
+                        let pkgs: Vec<&str> = orphans.lines().collect();
+                        let mut cmd = vec!["pacman", "-Rns", "--noconfirm"];
+                        cmd.extend(pkgs);
+                        sudo_cmd_streaming(pw, &cmd, sh);
+                        push_log(sh, "✓ Orphans removed.", LogColor::Green);
+                    }
+                });
+            }
+            ui.end_row();
+
+            // Optimize Database
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Database Optimization").font(FontId::monospace(10.0)).strong());
+                ui.label(RichText::new("Optimize the pacman database for faster access.").font(FontId::monospace(9.0)).color(self.theme.fg_dim));
+            });
+            if ui.add(egui::Button::new(RichText::new("Optimize DB").color(Color32::WHITE)).fill(self.theme.btn_green)).clicked() {
+                self.clear_log(); self.show_log = true;
+                self.request_sudo("Enter sudo password to optimize database:", |pw, sh, _| {
+                    push_log(sh, "Optimizing database...", LogColor::Accent);
+                    sudo_cmd_streaming(pw, &["pacman-db-upgrade"], sh);
+                    push_log(sh, "✓ Database optimized.", LogColor::Green);
+                });
+            }
+            ui.end_row();
+        });
+    }
 
     fn draw_mirrors(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().id_source("mir_scroll").auto_shrink([false,false])
