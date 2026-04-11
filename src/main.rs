@@ -70,20 +70,20 @@ impl Theme {
     }
     fn light() -> Self {
         Self {
-            bg:         hex("f6f8fa"), bg_panel:   hex("ffffff"),
-            bg_row_alt: hex("f0f2f4"), bg_hdr:     hex("e8ecf0"),
-            bg_log:     hex("1c1c1c"), fg:          hex("1f2328"),
-            fg_dim:     hex("656d76"), accent:      hex("0969da"),
-            btn_bg:     hex("e6edf3"),
-            ver_old:    hex("cf222e"), ver_new:     hex("1a7f37"),
-            kernel_fg:  hex("cf222e"), kernel_bg:   hex("ffebe9"),
-            btn_green:  hex("1a7f37"), btn_red:     hex("cf222e"),
-            btn_orange: hex("bc4c00"), btn_accent:  hex("0969da"),
-            repo_core:  hex("9a6700"), repo_extra:  hex("1a7f37"),
-            repo_multi: hex("0969da"), repo_chaot:  hex("6639ba"),
-            repo_aur:   hex("8250df"), repo_def:    hex("57606a"),
-            chart1:     hex("0969da"), chart2:      hex("1a7f37"),
-            chart3:     hex("cf222e"),
+            bg:         hex("e1e4e8"), bg_panel:   hex("f6f8fa"),
+            bg_row_alt: hex("ebedef"), bg_hdr:     hex("d1d5da"),
+            bg_log:     hex("24292e"), fg:          hex("24292e"),
+            fg_dim:     hex("586069"), accent:      hex("0366d6"),
+            btn_bg:     hex("fafbfc"),
+            ver_old:    hex("d73a49"), ver_new:     hex("28a745"),
+            kernel_fg:  hex("d73a49"), kernel_bg:   hex("f9ebeb"),
+            btn_green:  hex("28a745"), btn_red:     hex("cb2431"),
+            btn_orange: hex("e36209"), btn_accent:  hex("0366d6"),
+            repo_core:  hex("b08800"), repo_extra:  hex("28a745"),
+            repo_multi: hex("0366d6"), repo_chaot:  hex("6f42c1"),
+            repo_aur:   hex("ea4aaa"), repo_def:    hex("6a737d"),
+            chart1:     hex("0366d6"), chart2:      hex("28a745"),
+            chart3:     hex("d73a49"),
         }
     }
     fn repo_color(&self, repo: &str) -> Color32 {
@@ -100,7 +100,7 @@ impl Theme {
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct UpdateEntry {
     pkg:    String,
     repo:   String,
@@ -109,7 +109,7 @@ struct UpdateEntry {
     kernel: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct SearchResult {
     repo:      String,
     pkg:       String,
@@ -120,14 +120,14 @@ struct SearchResult {
     selected:  bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PkgInfo {
     fields:    Vec<(String, String)>,
     files:     String,
     installed: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct StatsData {
     pkg_count: String,
     explicit:  String,
@@ -148,7 +148,7 @@ struct StatsData {
     cpu_usage: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct RepoSection {
     name:    String,
     enabled: bool,
@@ -156,7 +156,7 @@ struct RepoSection {
     is_opts: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct MirrorConf {
     countries:       String,
     proto_https:     bool,
@@ -202,6 +202,7 @@ struct Shared {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 enum LogColor { Normal, Dim, Green, Red, Accent, Orange }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -488,10 +489,22 @@ fn tempfile() -> Result<(String, std::fs::File), String> {
 
 // ── Tab enum ──────────────────────────────────────────────────────────────────
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 enum Tab { Updates, Search, PkgInfo, Stats, Orphans, Repos, Mirrors, Maintenance, Settings }
 
 // ── App state ─────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AppConfig {
+    ui_scale: f32,
+    dark_mode: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self { ui_scale: 1.0, dark_mode: true }
+    }
+}
 
 struct App {
     theme:        Theme,
@@ -554,13 +567,15 @@ struct App {
     status:         String,
     busy:           bool,
     ui_scale:       f32,
+    last_ui_scale:  f32,
 }
 
 type SudoCallback  = Box<dyn FnOnce(&str, &Arc<Mutex<Shared>>, &Option<String>) + Send>;
 type ConfirmAction = Box<dyn FnOnce(&mut App) + Send>;
 
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let config: AppConfig = cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)).unwrap_or_default();
         let aur = detect_aur_helper();
         let shared = Arc::new(Mutex::new(Shared::default()));
 
@@ -570,7 +585,8 @@ impl App {
         thread::spawn(move || fetch_updates(&shared2, &aur2));
 
         Self {
-            theme: Theme::dark(), dark_mode: true,
+            theme: if config.dark_mode { Theme::dark() } else { Theme::light() },
+            dark_mode: config.dark_mode,
             tab: Tab::Updates, shared, aur_helper: aur,
             updates: vec![], kernel_found: false, show_reboot: false,
             search_query: String::new(), search_res: vec![],
@@ -588,7 +604,8 @@ impl App {
             show_confirm: false, confirm_msg: String::new(), confirm_action: None,
             show_log: false, log_lines: vec![],
             status: "Checking for updates…".into(), busy: true,
-            ui_scale: 1.0,
+            ui_scale: config.ui_scale,
+            last_ui_scale: config.ui_scale,
         }
     }
 
@@ -968,9 +985,24 @@ fn fetch_repos(shared: &Arc<Mutex<Shared>>) {
 // ── UI rendering ──────────────────────────────────────────────────────────────
 
 impl eframe::App for App {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let config = AppConfig {
+            ui_scale: self.ui_scale,
+            dark_mode: self.dark_mode,
+        };
+        eframe::set_value(storage, eframe::APP_KEY, &config);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_shared();
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
+
+        if self.ui_scale != self.last_ui_scale {
+            let current_size = ctx.screen_rect().size();
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(current_size));
+            self.last_ui_scale = self.ui_scale;
+        }
+
         ctx.set_pixels_per_point(self.ui_scale);
 
         // Apply visuals
@@ -1786,76 +1818,109 @@ impl App {
             ui.label(RichText::new("System Maintenance").font(FontId::monospace(13.0)).color(self.theme.fg).strong());
         });
         ui.separator();
-
         ui.add_space(8.0);
-        egui::Grid::new("maint_grid").num_columns(2).spacing([20.0, 20.0]).show(ui, |ui| {
+
+        egui::ScrollArea::vertical().id_source("maint_scroll").show(ui, |ui| {
+            ui.add_space(8.0);
+
             // Package Cache
-            ui.vertical(|ui| {
-                ui.label(RichText::new("Package Cache").font(FontId::monospace(12.0)).strong());
-                ui.label(RichText::new("Remove old versions of installed and uninstalled packages from the cache.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
-            });
-            if ui.add(egui::Button::new(RichText::new("Clear Cache (paccache)").color(Color32::WHITE)).fill(self.theme.btn_orange)).clicked() {
-                self.clear_log(); self.show_log = true;
-                self.request_sudo("Enter sudo password to clear package cache:", |pw, sh, _| {
-                    push_log(sh, "Cleaning package cache...", LogColor::Accent);
-                    sudo_cmd_streaming(pw, &["paccache", "-r"], sh);
-                    push_log(sh, "✓ Cache cleaned.", LogColor::Green);
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(300.0);
+                        if ui.add_sized([300.0, 32.0], egui::Button::new(RichText::new("Clear Cache (paccache)").color(Color32::WHITE).strong()).fill(self.theme.btn_orange)).clicked() {
+                            self.clear_log(); self.show_log = true;
+                            self.request_sudo("Enter sudo password to clear package cache:", |pw, sh, _| {
+                                push_log(sh, "Cleaning package cache...", LogColor::Accent);
+                                sudo_cmd_streaming(pw, &["paccache", "-r"], sh);
+                                push_log(sh, "✓ Cache cleaned.", LogColor::Green);
+                            });
+                        }
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Package Cache").font(FontId::monospace(12.0)).strong());
+                        ui.label(RichText::new("Remove old versions of installed and uninstalled packages from the cache.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+                    });
                 });
-            }
-            ui.end_row();
+            });
+            ui.add_space(8.0);
 
             // Journal Logs
-            ui.vertical(|ui| {
-                ui.label(RichText::new("Systemd Journal").font(FontId::monospace(12.0)).strong());
-                ui.label(RichText::new("Vacuum systemd journal logs older than 2 weeks to free up space.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
-            });
-            if ui.add(egui::Button::new(RichText::new("Vacuum Logs").color(Color32::WHITE)).fill(self.theme.btn_accent)).clicked() {
-                self.clear_log(); self.show_log = true;
-                self.request_sudo("Enter sudo password to vacuum journal logs:", |pw, sh, _| {
-                    push_log(sh, "Vacuuming journal logs...", LogColor::Accent);
-                    sudo_cmd_streaming(pw, &["journalctl", "--vacuum-time=2weeks"], sh);
-                    push_log(sh, "✓ Logs vacuumed.", LogColor::Green);
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(300.0);
+                        if ui.add_sized([300.0, 32.0], egui::Button::new(RichText::new("Vacuum Logs").color(Color32::WHITE).strong()).fill(self.theme.btn_accent)).clicked() {
+                            self.clear_log(); self.show_log = true;
+                            self.request_sudo("Enter sudo password to vacuum journal logs:", |pw, sh, _| {
+                                push_log(sh, "Vacuuming journal logs...", LogColor::Accent);
+                                sudo_cmd_streaming(pw, &["journalctl", "--vacuum-time=2weeks"], sh);
+                                push_log(sh, "✓ Logs vacuumed.", LogColor::Green);
+                            });
+                        }
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Systemd Journal").font(FontId::monospace(12.0)).strong());
+                        ui.label(RichText::new("Vacuum systemd journal logs older than 2 weeks to free up space.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+                    });
                 });
-            }
-            ui.end_row();
+            });
+            ui.add_space(8.0);
 
             // Unused Dependencies
-            ui.vertical(|ui| {
-                ui.label(RichText::new("Unused Dependencies").font(FontId::monospace(12.0)).strong());
-                ui.label(RichText::new("Remove packages that are no longer needed (orphans).").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
-            });
-            if ui.add(egui::Button::new(RichText::new("Remove Orphans").color(Color32::WHITE)).fill(self.theme.btn_red)).clicked() {
-                self.clear_log(); self.show_log = true;
-                self.request_sudo("Enter sudo password to remove all orphans:", |pw, sh, _| {
-                    push_log(sh, "Checking for orphans...", LogColor::Accent);
-                    let orphans = run_cmd(&["pacman", "-Qdtq"]);
-                    if orphans.is_empty() {
-                        push_log(sh, "No orphans found.", LogColor::Green);
-                    } else {
-                        let pkgs: Vec<&str> = orphans.lines().collect();
-                        let mut cmd = vec!["pacman", "-Rns", "--noconfirm"];
-                        cmd.extend(pkgs);
-                        sudo_cmd_streaming(pw, &cmd, sh);
-                        push_log(sh, "✓ Orphans removed.", LogColor::Green);
-                    }
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(300.0);
+                        if ui.add_sized([300.0, 32.0], egui::Button::new(RichText::new("Remove Orphans").color(Color32::WHITE).strong()).fill(self.theme.btn_red)).clicked() {
+                            self.clear_log(); self.show_log = true;
+                            self.request_sudo("Enter sudo password to remove all orphans:", |pw, sh, _| {
+                                push_log(sh, "Checking for orphans...", LogColor::Accent);
+                                let orphans = run_cmd(&["pacman", "-Qdtq"]);
+                                if orphans.is_empty() {
+                                    push_log(sh, "No orphans found.", LogColor::Green);
+                                } else {
+                                    let pkgs: Vec<&str> = orphans.lines().collect();
+                                    let mut cmd = vec!["pacman", "-Rns", "--noconfirm"];
+                                    cmd.extend(pkgs);
+                                    sudo_cmd_streaming(pw, &cmd, sh);
+                                    push_log(sh, "✓ Orphans removed.", LogColor::Green);
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Unused Dependencies").font(FontId::monospace(12.0)).strong());
+                        ui.label(RichText::new("Remove packages that are no longer needed (orphans).").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+                    });
                 });
-            }
-            ui.end_row();
+            });
+            ui.add_space(8.0);
 
             // Optimize Database
-            ui.vertical(|ui| {
-                ui.label(RichText::new("Database Optimization").font(FontId::monospace(12.0)).strong());
-                ui.label(RichText::new("Optimize the pacman database for faster access.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
-            });
-            if ui.add(egui::Button::new(RichText::new("Optimize DB").color(Color32::WHITE)).fill(self.theme.btn_green)).clicked() {
-                self.clear_log(); self.show_log = true;
-                self.request_sudo("Enter sudo password to optimize database:", |pw, sh, _| {
-                    push_log(sh, "Optimizing database...", LogColor::Accent);
-                    sudo_cmd_streaming(pw, &["pacman-db-upgrade"], sh);
-                    push_log(sh, "✓ Database optimized.", LogColor::Green);
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(300.0);
+                        if ui.add_sized([300.0, 32.0], egui::Button::new(RichText::new("Optimize DB").color(Color32::WHITE).strong()).fill(self.theme.btn_green)).clicked() {
+                            self.clear_log(); self.show_log = true;
+                            self.request_sudo("Enter sudo password to optimize database:", |pw, sh, _| {
+                                push_log(sh, "Optimizing database...", LogColor::Accent);
+                                sudo_cmd_streaming(pw, &["pacman-db-upgrade"], sh);
+                                push_log(sh, "✓ Database optimized.", LogColor::Green);
+                            });
+                        }
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Database Optimization").font(FontId::monospace(12.0)).strong());
+                        ui.label(RichText::new("Optimize the pacman database for faster access.").font(FontId::monospace(11.0)).color(self.theme.fg_dim));
+                    });
                 });
-            }
-            ui.end_row();
+            });
         });
     }
 
