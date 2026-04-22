@@ -270,7 +270,11 @@ fn verify_sudo(pw: &str) -> bool {
 
 fn sudo_cmd_streaming(pw: &str, cmd: &[&str], log: &Arc<Mutex<Shared>>) {
     let mut full = vec!["sudo", "-S", "-p", ""];
-    full.extend_from_slice(cmd);
+    if cmd == &["-v"] {
+        full.push("-v");
+    } else {
+        full.extend_from_slice(cmd);
+    }
     let mut child = match Command::new(full[0])
         .args(&full[1..])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
@@ -732,18 +736,29 @@ fn fetch_updates(shared: &Arc<Mutex<Shared>>, aur: &Option<String>) {
     }).collect();
 
     // Get repo for each package
-    let si = Command::new("pacman").arg("-Si")
-        .args(parsed.iter().map(|(n,_,_)| n.as_str()))
-        .output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
-    let mut pkg_repo: std::collections::HashMap<String,String> = Default::default();
-    let mut cur_repo = String::new();
-    for line in si.lines() {
-        if let Some(r) = line.strip_prefix("Repository") {
-            cur_repo = r.trim_start_matches(':').trim().to_string();
-        } else if let Some(n) = line.strip_prefix("Name") {
-            let name = n.trim_start_matches(':').trim().to_string();
-            if !name.is_empty() && !cur_repo.is_empty() {
-                pkg_repo.insert(name, cur_repo.clone());
+    let mut pkg_repo: std::collections::HashMap<String, String> = Default::default();
+    // Chunk pacman -Si calls to avoid potential E2BIG (argument list too long)
+    for chunk in parsed.chunks(100) {
+        let si = Command::new("pacman")
+            .env("LC_ALL", "C")
+            .arg("-Si")
+            .args(chunk.iter().map(|(n, _, _)| n.as_str()))
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let mut cur_repo = String::new();
+        for line in si.lines() {
+            if let Some(colon_pos) = line.find(':') {
+                let key = line[..colon_pos].trim();
+                let val = line[colon_pos + 1..].trim();
+                if key == "Repository" {
+                    cur_repo = val.to_string();
+                } else if key == "Name" {
+                    if !val.is_empty() && !cur_repo.is_empty() {
+                        pkg_repo.insert(val.to_string(), cur_repo.clone());
+                    }
+                }
             }
         }
     }
