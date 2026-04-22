@@ -281,46 +281,50 @@ fn sudo_cmd_streaming(pw: &str, cmd: &[&str], log: &Arc<Mutex<Shared>>) {
                 return;
             }
         };
+
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(stdin, "{}", pw);
     }
-    // Stream stdout
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().flatten() {
-            push_log(log, &line, LogColor::Normal);
-        }
-    }
-    // Also capture stderr
-    if let Some(stderr) = child.stderr.take() {
-        for line in BufReader::new(stderr).lines().flatten() {
-            push_log(log, &line, LogColor::Dim);
-        }
-    }
-    let status = child.wait().unwrap_or_else(|_| {
-        // If wait fails, treat as non-zero exit
-        Command::new("false").status().unwrap()
-    });
-    if !status.success() {
-        push_log(log, &format!("Exit code: {}", status.code().unwrap_or(-1)), LogColor::Red);
-    }
+
+    stream_output(child, log);
 }
 
 fn cmd_streaming(cmd: &[&str], log: &Arc<Mutex<Shared>>) {
-    let mut child = match Command::new(cmd[0]).args(&cmd[1..])
+    let child = match Command::new(cmd[0]).args(&cmd[1..])
         .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
             Ok(c) => c, Err(e) => { push_log(log, &format!("Error: {e}"), LogColor::Red); return; }
         };
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().flatten() {
-            push_log(log, &line, LogColor::Normal);
+
+    stream_output(child, log);
+}
+
+fn stream_output(mut child: std::process::Child, log: &Arc<Mutex<Shared>>) {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let log_clone = Arc::clone(log);
+
+    let t_stdout = thread::spawn(move || {
+        if let Some(out) = stdout {
+            for line in BufReader::new(out).lines().flatten() {
+                push_log(&log_clone, &line, LogColor::Normal);
+            }
         }
-    }
-    if let Some(stderr) = child.stderr.take() {
-        for line in BufReader::new(stderr).lines().flatten() {
+    });
+
+    if let Some(err) = stderr {
+        for line in BufReader::new(err).lines().flatten() {
             push_log(log, &line, LogColor::Dim);
         }
     }
-    let _ = child.wait();
+
+    let _ = t_stdout.join();
+    let status = child.wait().unwrap_or_else(|_| {
+        Command::new("false").status().unwrap()
+    });
+
+    if !status.success() {
+        push_log(log, &format!("Exit code: {}", status.code().unwrap_or(-1)), LogColor::Red);
+    }
 }
 
 fn push_log(shared: &Arc<Mutex<Shared>>, line: &str, color: LogColor) {
@@ -744,12 +748,9 @@ fn fetch_updates(shared: &Arc<Mutex<Shared>>, aur: &Option<String>) {
         }
     }
 
-    let (_,sections) = parse_pacman_conf("/etc/pacman.conf");
-    let has_chaotic = sections.iter().any(|s| s.name.to_lowercase()=="chaotic-aur" && s.enabled);
-
     let mut updates: Vec<UpdateEntry> = parsed.drain(..).map(|(pkg,old,new)| {
         let repo = pkg_repo.get(&pkg).cloned()
-            .unwrap_or_else(|| if has_chaotic { "chaotic-aur".into() } else { "aur".into() });
+            .unwrap_or_else(|| "aur".into());
         let kernel = is_kernel(&pkg);
         UpdateEntry { pkg, repo, old, new, kernel }
     }).collect();
@@ -770,7 +771,9 @@ fn do_updates(pw: &str, shared: &Arc<Mutex<Shared>>, aur: &Option<String>,
     if has_aur {
         if let Some(h) = aur {
             push_log(shared, "── AUR / chaotic-aur updates ──────────────", LogColor::Dim);
-            cmd_streaming(&[h.as_str(),"-Sua","--noconfirm"], shared);
+            // Refresh sudo timestamp so the AUR helper (running as user) can use it
+            sudo_cmd_streaming(pw, &["-v"], shared);
+            cmd_streaming(&[h.as_str(), "-Sua", "--noconfirm"], shared);
         }
     }
     push_log(shared, "✓ All updates complete.", LogColor::Green);
@@ -1022,6 +1025,18 @@ impl eframe::App for App {
         if self.show_reboot  { self.draw_reboot_dialog(ctx); }
         if self.show_add_repo{ self.draw_add_repo_dialog(ctx); }
 
+        if self.show_log {
+            egui::TopBottomPanel::bottom("log_panel")
+                .resizable(true)
+                .default_height(160.0)
+                .min_height(80.0)
+                .max_height(300.0)
+                .frame(egui::Frame::none().fill(self.theme.bg_log))
+                .show(ctx, |ui| {
+                    self.draw_log(ui);
+                });
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(self.theme.bg))
             .show(ctx, |ui| {
@@ -1046,9 +1061,6 @@ impl eframe::App for App {
                             Tab::Settings => self.draw_settings(ui),
                         }
                     });
-
-                // Log panel
-                if self.show_log { self.draw_log(ui); }
             });
     }
 }
@@ -1224,8 +1236,8 @@ impl App {
                     egui::Button::new(RichText::new("▶  Update All").color(Color32::WHITE).strong())
                         .fill(self.theme.btn_green)
                 ).clicked() {
-                    let has_off = self.updates.iter().any(|u| matches!(u.repo.to_lowercase().as_str(), "core"|"extra"|"multilib"));
-                    let has_aur = self.updates.iter().any(|u| matches!(u.repo.to_lowercase().as_str(), "chaotic-aur"|"aur"));
+                    let has_off = self.updates.iter().any(|u| u.repo.to_lowercase() != "aur");
+                    let has_aur = self.updates.iter().any(|u| u.repo.to_lowercase() == "aur");
                     let kf = self.kernel_found;
                     self.clear_log(); self.show_log = true;
                     self.request_sudo("Enter your sudo password to begin updating:", move |pw, sh, aur| {
@@ -2117,25 +2129,25 @@ impl App {
     }
 
     fn draw_log(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        let avail = (ui.available_height()).max(80.0).min(220.0);
-        egui::Frame::none().fill(self.theme.bg_log).inner_margin(4.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().id_source("log_scroll").stick_to_bottom(true)
-                .max_height(avail).auto_shrink([false,false])
-                .show(ui, |ui| {
-                    for (line, color) in &self.log_lines {
-                        let col = match color {
-                            LogColor::Normal => self.theme.fg,
-                            LogColor::Dim    => self.theme.fg_dim,
-                            LogColor::Green  => self.theme.ver_new,
-                            LogColor::Red    => self.theme.ver_old,
-                            LogColor::Accent => self.theme.accent,
-                            LogColor::Orange => self.theme.btn_orange,
-                        };
-                        ui.label(RichText::new(line).font(FontId::monospace(11.0)).color(col));
-                    }
-                });
-        });
+        ui.add_space(2.0);
+        egui::ScrollArea::vertical()
+            .id_source("log_scroll")
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                for (line, color) in &self.log_lines {
+                    let col = match color {
+                        LogColor::Normal => self.theme.fg,
+                        LogColor::Dim    => self.theme.fg_dim,
+                        LogColor::Green  => self.theme.ver_new,
+                        LogColor::Red    => self.theme.ver_old,
+                        LogColor::Accent => self.theme.accent,
+                        LogColor::Orange => self.theme.btn_orange,
+                    };
+                    ui.label(RichText::new(line).font(FontId::monospace(11.0)).color(col));
+                }
+            });
     }
 
     // ── Dialogs ───────────────────────────────────────────────────────────────
