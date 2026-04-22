@@ -199,6 +199,7 @@ struct Shared {
     mirror_status:Option<String>,
     status:       String,
     busy:         bool,
+    reboot_required: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -243,10 +244,21 @@ fn repo_order(repo: &str) -> usize {
     }
 }
 
-fn split_ver_diff(ver: &str, other: &str) -> (String, String) {
-    let common = ver.chars().zip(other.chars())
+fn split_ver_diff(ver: &str, other: &str) -> (String, String, String) {
+    let common_prefix = ver.chars().zip(other.chars())
         .take_while(|(a, b)| a == b).count();
-    (ver[..common].to_string(), ver[common..].to_string())
+
+    let v_rem = &ver[common_prefix..];
+    let o_rem = &other[common_prefix..];
+
+    let common_suffix = v_rem.chars().rev().zip(o_rem.chars().rev())
+        .take_while(|(a, b)| a == b).count();
+
+    let prefix = &ver[..common_prefix];
+    let diff = &ver[common_prefix..ver.len() - common_suffix];
+    let suffix = &ver[ver.len() - common_suffix..];
+
+    (prefix.to_string(), diff.to_string(), suffix.to_string())
 }
 
 fn fmt_bytes(mut n: f64) -> String {
@@ -310,6 +322,7 @@ fn stream_output(mut child: std::process::Child, log: &Arc<Mutex<Shared>>) {
     let t_stdout = thread::spawn(move || {
         if let Some(out) = stdout {
             for line in BufReader::new(out).lines().flatten() {
+                update_status_from_log(&log_clone, &line);
                 push_log(&log_clone, &line, LogColor::Normal);
             }
         }
@@ -317,6 +330,7 @@ fn stream_output(mut child: std::process::Child, log: &Arc<Mutex<Shared>>) {
 
     if let Some(err) = stderr {
         for line in BufReader::new(err).lines().flatten() {
+            update_status_from_log(log, &line);
             push_log(log, &line, LogColor::Dim);
         }
     }
@@ -334,6 +348,30 @@ fn stream_output(mut child: std::process::Child, log: &Arc<Mutex<Shared>>) {
 fn push_log(shared: &Arc<Mutex<Shared>>, line: &str, color: LogColor) {
     if let Ok(mut s) = shared.lock() {
         s.log_lines.push((line.to_string(), color));
+    }
+}
+
+fn update_status_from_log(shared: &Arc<Mutex<Shared>>, line: &str) {
+    let line = line.trim();
+    if line.is_empty() { return; }
+
+    // Look for common pacman/AUR helper progress indicators
+    let msg = if line.starts_with("(") {
+        // e.g. (1/166) upgrading coreutils
+        Some(line.to_string())
+    } else if line.contains("downloading") && line.contains("...") {
+        // e.g. downloading coreutils...
+        Some(line.to_string())
+    } else if line.contains("%") && (line.contains("K/s") || line.contains("M/s")) {
+        // e.g. coreutils-9.5-1-x86_64  1123.4 KiB   10.5 MiB/s 00:00 [######################] 100%
+        // Only take the first part to avoid the giant bar
+        Some(line.split_whitespace().next().unwrap_or(line).to_string())
+    } else {
+        None
+    };
+
+    if let Some(m) = msg {
+        set_status(shared, &m);
     }
 }
 
@@ -662,6 +700,10 @@ impl App {
             self.mirror_status = ms;
             self.busy = false;
         }
+        if s.reboot_required {
+            self.show_reboot = true;
+            s.reboot_required = false;
+        }
     }
 
     fn request_sudo<F>(&mut self, prompt: &str, cb: F)
@@ -794,6 +836,7 @@ fn do_updates(pw: &str, shared: &Arc<Mutex<Shared>>, aur: &Option<String>,
     push_log(shared, "✓ All updates complete.", LogColor::Green);
     if kernel_found {
         push_log(shared, "⚠  Kernel updated — reboot required!", LogColor::Orange);
+        if let Ok(mut s) = shared.lock() { s.reboot_required = true; }
     }
     // Re-check
     set_status(shared, "Checking for updates…");
@@ -1211,21 +1254,27 @@ impl App {
                                 RichText::new(&u.pkg).font(FontId::monospace(12.0)).color(pkg_color)
                             ));
                             // Version diff
-                            let (pre, suf) = split_ver_diff(&u.old, &u.new);
-                            ui.add_sized([160.0,18.0], egui::Label::new({
-                                let mut rt = RichText::new(format!("{}{}", pre, suf)).font(FontId::monospace(12.0));
-                                if !suf.is_empty() { rt = rt.color(self.theme.ver_old); }
-                                else { rt = rt.color(self.theme.fg); }
-                                rt
-                            }));
+                            let (pre, mid, suf) = split_ver_diff(&u.old, &u.new);
+                            ui.allocate_ui(Vec2::new(160.0, 18.0), |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    ui.label(RichText::new(pre).font(FontId::monospace(12.0)));
+                                    ui.label(RichText::new(mid).font(FontId::monospace(12.0)).color(self.theme.ver_old));
+                                    ui.label(RichText::new(suf).font(FontId::monospace(12.0)));
+                                });
+                            });
+
                             ui.label(RichText::new("→").color(self.theme.fg_dim).font(FontId::monospace(12.0)));
-                            let (pre2, suf2) = split_ver_diff(&u.new, &u.old);
-                            ui.add_sized([160.0,18.0], egui::Label::new({
-                                let mut rt = RichText::new(format!("{}{}", pre2, suf2)).font(FontId::monospace(12.0));
-                                if !suf2.is_empty() { rt = rt.color(self.theme.ver_new); }
-                                else { rt = rt.color(self.theme.fg); }
-                                rt
-                            }));
+
+                            let (pre2, mid2, suf2) = split_ver_diff(&u.new, &u.old);
+                            ui.allocate_ui(Vec2::new(160.0, 18.0), |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    ui.label(RichText::new(pre2).font(FontId::monospace(12.0)));
+                                    ui.label(RichText::new(mid2).font(FontId::monospace(12.0)).color(self.theme.ver_new));
+                                    ui.label(RichText::new(suf2).font(FontId::monospace(12.0)));
+                                });
+                            });
                             if u.kernel {
                                 ui.label(RichText::new("⚠ KERNEL").color(self.theme.kernel_fg)
                                     .font(FontId::monospace(11.0)).strong());
@@ -2187,7 +2236,7 @@ impl App {
                     let submitted = ui.add(egui::Button::new(
                         RichText::new("  Authenticate  ").color(Color32::WHITE))
                         .fill(self.theme.btn_green)).clicked()
-                        || (pw_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)));
+                        || (pw_resp.has_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)));
                     if submitted { self.submit_sudo(); }
                     if ui.button("  Cancel  ").clicked() {
                         self.show_sudo = false;
